@@ -3,15 +3,25 @@ import torch
 import torch.nn.functional as F
 from collections import defaultdict, deque
 import torch.multiprocessing as mp
+
 from torch.multiprocessing import Manager
+
+# Create a SINGLE shared manager at the module level
+global_manager = None
+
+def get_global_manager():
+    global global_manager
+    if global_manager is None:
+        global_manager = Manager()  # Using torch's manager
+    return global_manager
 
 class QValueTable:
     """
     Q-value table implemented with PyTorch tensors for shared memory access.
     Manages the state-action values and provides update functionality.
     """
-    def __init__(self, env, learning_rate=0.01, gamma=0.99):
-        self.env = env
+    def __init__(self, action_size,learning_rate=0.01, gamma=0.99):
+        # self.env = env
         self.alpha = learning_rate
         self.gamma = gamma
         
@@ -20,11 +30,25 @@ class QValueTable:
         # self.q_dict = {}
 
         # Create manager to handle shared dictionary
-        self.manager = Manager()
-        self.q_dict = self.manager.dict()
+        # self.manager = get_global_manager()
+        # self.q_dict = self.manager.dict()
+        self.q_dict = {}
         
         # Action space size
-        self.action_size = env.action_space.n
+        self.action_size = action_size
+
+        # Add pickling methods
+    # def __getstate__(self):
+    #     state = self.__dict__.copy()
+    #     # Remove the manager as it can't be pickled
+    #     state['manager'] = None
+    #     # Keep the q_dict as it's a managed dict that can be shared
+    #     return state
+    
+    # def __setstate__(self, state):
+    #     self.__dict__.update(state)
+    #     # Use the global manager
+    #     self.manager = get_global_manager()
     
     def get_q_value(self, state):
         """Get Q-values for a given state"""

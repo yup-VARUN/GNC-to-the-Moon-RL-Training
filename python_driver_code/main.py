@@ -4,11 +4,12 @@ import gymnasium as gym
 
 import torch
 from torch import multiprocessing as tmp
-
 import multiprocessing as mp
 from multiprocessing.synchronize import Event as mpEventType
+
 from tqdm import tqdm
 import time
+import os
 
 from blackjack_agent_package import Q_value_table_class as QVT
 from episode_worker import Worker, load_worker
@@ -33,22 +34,27 @@ def update_nets(update_event: mpEventType, outputs_of_processes: dict[str : dict
     
     '''
 
-    if not (pnet and qnets):
+    if not (pnet or qnets):
         print("No nets given!")
         raise 
 
     # Pause workers for update
-    update_event.set()
+    print("Q-net key size",len(qnets.q_dict.keys()))
+    
     # In future: Scrap this nested dict crap for redis :/
     print("Performing update to networks:")
     for proc_out in tqdm(outputs_of_processes.values()):
         for episode in proc_out.values():
             experiences = episode[0]
             qnets.update(experiences)
-            
+    print("Q-net key size after updating",len(qnets.q_dict.keys()))
     # Use Blackjack Q-net/shared_network class value obj's method to update here to simplify things
-
-    update_event.clear()
+    # Set event to True and allow workers to run again
+    update_event.set()
+    print("Update status:", update_event.is_set())
+    # time.sleep(1)
+    # update_event.clear()
+    
 
 
 def pass_nets_to_workers(update_event: mpEventType, new_nets, worker_processes):
@@ -63,23 +69,26 @@ def setting_device():
     else:
         device = torch.device('cpu')
 
-    
+def celebrate():
+    print("All workers reach barrier!")
 
 
 def main():
     
     # Inits
+    tmp.freeze_support()  # Add this line
     extinction_event = mp.Event() #Kill everything after program exits
     
     #Force any processes created to utilize spawn method within program
     tmp.set_start_method('spawn',force=True) 
 
-
+    global_manager = QVT.get_global_manager()
     # Have manager for syncing updates to nets
     update_sync_manager = tmp.Manager()
 
-    sim_barrier_completion = update_sync_manager.Barrier(parties=NUM_PROCESSES, ) 
+    sim_barrier_completion = update_sync_manager.Barrier(parties=NUM_PROCESSES+1,action=celebrate ) 
     # processes_running_state = update_sync_manager.dict() #{<process_obj: curr_status>}
+    processes : list[tmp.Process]
     processes = [] #Where The actual process objs
     
     #<process_id: end_results_of_episodes_of_that_process>
@@ -101,23 +110,27 @@ def main():
     # Blackjack example:
 
     env = gym.make("Blackjack-v1", sab=False)
-    env = gym.wrappers.RecordEpisodeStatistics(env, buffer_length=1000)
-    BJ_Q_net = QVT.QValueTable(env)
+    action_size = env.action_space.n
+    env.close()
+    # env = gym.wrappers.RecordEpisodeStatistics(env, buffer_length=1000)
+    # BJ_Q_net = QVT.QValueTable(env)
+    BJ_Q_net = QVT.QValueTable(action_size)
 
+    # print(BJ_Q_net)
 
     # Initialize workers
     
     target_sim_func: function
 
-    worker = Worker(
-        target_sim_func= None,
-        episode_count = EPISODE_CNT,
-        update_event = update_completion,
-        completion_barrier = sim_barrier_completion,
-        extinction_event = extinction_event,
-        shared_output_dump = processes_outputs
+    # worker = Worker(
+    #     target_sim_func= None,
+    #     episode_count = EPISODE_CNT,
+    #     update_event = update_completion,
+    #     completion_barrier = sim_barrier_completion,
+    #     extinction_event = extinction_event,
+    #     shared_output_dump = processes_outputs
 
-    )
+    # )
     
     # Init Processes
     print("Initializing Workers")
@@ -125,11 +138,12 @@ def main():
         
 
         # Run worker's
+        # Current Problem: Q-net obj cannot be passed because of pickling issues
         process = tmp.Process(
             target= load_worker,
             kwargs={
             "shared_q_nets": BJ_Q_net,
-            "episode_count": EPISODE_CNT,
+            "episode_count": 10,
             "update_event": update_completion,
             "completion_barrier": sim_barrier_completion, 
             "extinction_event": extinction_event,
@@ -137,10 +151,14 @@ def main():
         }
 
         )
-
-        process.daemon = True #Make sure that child dies with the parent if being terminated
-        processes.append(process)
-        process.start()
+        try:
+            process.daemon = True #Make sure that child dies with the parent if being terminated
+            processes.append(process)
+            time.sleep(5)
+            process.start()
+        except Exception as exception:
+            print(exception)
+            exit()
         # processes_running_state.update({process.ident: worker.status})
 
     
@@ -148,32 +166,50 @@ def main():
 
     # Main Training Loop
 
-    for epoch in range(EPOCH_CNT):
+    for epoch in tqdm(range(EPOCH_CNT)):
 
         # Workers will wait for each other to complete
-        while sim_barrier_completion.parties != sim_barrier_completion.n_waiting:
-            print(f"Workers done: {sim_barrier_completion.n_waiting} / {sim_barrier_completion.parties}")
-            
-            time.sleep(5)
+        # while sim_barrier_completion.parties != sim_barrier_completion.n_waiting:
+        #     if False in [process.is_alive() for process in processes]:
+        #         print("Failed worker found exiting")
+        #         exit()
+        #     print(f"Reporting from parent {os.getpid()}")
+        #     print(f"Workers done: {sim_barrier_completion.n_waiting} / {sim_barrier_completion.parties}")
+        #     print(sim_barrier_completion)
+        #     time.sleep(5)
+        print("Main Process waiting:")
+        sim_barrier_completion.wait()
+        print("Resetting Sim Completion Barrier")
+        sim_barrier_completion.reset()
+        print("Main Process Proceeding to update")
         # <Epoche: [<process_id: end_results_of_episodes_of_that_process>]>
         playback_queue.update({epoch: processes_outputs})
         
 
         # Update nets
+        print("Now updating Q-net")
         update_nets(update_completion, processes_outputs, qnets = BJ_Q_net)
-        sim_barrier_completion.reset()
+        time.sleep(3)
+        # sim_barrier_completion.reset()
+        update_completion.clear()
 
 
     
     pass
+    # End of all Epoches
+    
+
     # Kill any left over processes
     extinction_event.set()
     process: tmp.Process
     for process in processes:
-        process.join()
-    
+        process.join(timeout=1)
+        if process.is_alive():
+            process.terminate()
+    print("ALL EPOCHES Finished!")
+    print("Final Q-net key size: ",len(BJ_Q_net.q_dict.keys()))
+    print("Saving model")
     # Export the model
-
     export = BJ_Q_net.save()
     if export != 0:
         print("Unable to save model")

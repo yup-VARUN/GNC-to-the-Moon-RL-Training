@@ -2,11 +2,12 @@ import multiprocessing as mp
 from multiprocessing import synchronize
 import gymnasium as gym
 from torch import multiprocessing as tmp
-import time
 from collections import deque
 from functools import partial
 from blackjack_agent_package import blackjack_agent_class as BJA
+import time
 import os
+from tqdm import tqdm
 
 class Worker:
     '''
@@ -45,7 +46,7 @@ class Worker:
         shared_q_nets := List of q-nets
         '''
 
-        if not (shared_policy_net and shared_q_nets):
+        if not (shared_policy_net or shared_q_nets):
             print("Missing nets for updating")
             raise 
         # Blackjack example:
@@ -70,8 +71,10 @@ class Worker:
                 # run an episode
                     # Get SAR and store as an experience
                 # Get episode's SAR results and store inside worker
-
-
+            
+            # Debug print: Check if q-net is growing/properly being referenced
+            # print("Learning with Q-net key size",len(shared_q_nets.q_dict.keys()))
+            # for episode in tqdm(range(self.episode_count)):
             for episode in range(self.episode_count):
                 # Run Episode
                 experience, reward = blackjack_agent.run_episode()
@@ -85,9 +88,16 @@ class Worker:
             self.shared_output_dump.update({f"Worker {os.getpid()}": self.outputs})
 
             self.status = 'Waiting'
+            print(f"Worker {os.getpid()} now {self.status}")
+            # print("From Worker",self.completion_barrier)
             self.completion_barrier.wait()
             
-            time.wait(0.5) #Wait a bit for the update event to trigger properly
+            # if self.completion_barrier == 0:
+            #     print(f"Worker {os.getpid()}",self.completion_barrier.n_waiting)
+            # time.sleep(0.5) #Wait a bit for the update event to trigger properly
+            # while not self.update_event.is_set():
+            #     print("worker Waiting on update", self.update_event.is_set())
+            #     time.sleep(10)
             
             # wait while updating, should also wait until end of epoch
             self.update_event.wait()
@@ -102,23 +112,24 @@ class Worker:
 
 
 def load_worker(
-        target_sim_func,
-        EPISODE_CNT,
-        update_completion,
-        sim_barrier_completion,
+        episode_count,
+        update_event,
+        completion_barrier,
         extinction_event,
-        processes_outputs,
-        shared_q_nets):
+        shared_output_dump,
+        shared_q_nets,
+        target_sim_func=None):
     '''
     Params:
     '''
+    # print(shared_q_nets)
     worker = Worker(
         target_sim_func= None,
-        episode_count = EPISODE_CNT,
-        update_event = update_completion,
-        completion_barrier = sim_barrier_completion,
+        episode_count = episode_count,
+        update_event = update_event,
+        completion_barrier = completion_barrier,
         extinction_event = extinction_event,
-        shared_output_dump = processes_outputs
+        shared_output_dump = shared_output_dump
 
         )
     
