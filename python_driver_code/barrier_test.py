@@ -4,7 +4,7 @@
 from threading import BrokenBarrierError
 import torch.multiprocessing as tmp
 # from torch.multiprocessing import Barrier, Process, Event
-
+from multiprocessing import ba
 
 import time
 
@@ -28,6 +28,10 @@ def worker(barrier,
         except BrokenBarrierError:
             print(f"Worker {worker_id}: barrier was broken!")
             # Handle the broken barrier scenario
+        
+        update_event.wait()
+
+        
 
 
 def dummy_update(update_trigger_event):
@@ -63,7 +67,9 @@ def main():
         
         # Wait for workers
         execution_barrier.wait()
+        execution_barrier.reset()
         dummy_update(update_event)
+        update_event.clear()
 
 
 

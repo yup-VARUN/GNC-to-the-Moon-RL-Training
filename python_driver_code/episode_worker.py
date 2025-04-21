@@ -14,15 +14,17 @@ class Worker:
     Object class that will store target sim, target sim's , events, outputs of sim
     '''
     def __init__(self, 
-                 target_sim_func: partial,
                  episode_count: int, 
                  update_event: synchronize.Event,
                  completion_barrier: synchronize.Barrier, 
                  extinction_event: synchronize.Event,
-                 shared_output_dump: dict
+                 shared_output_dump: dict,
+                 target_sim_func: partial = None,
+                 target_sim_func_params: dict = {}
                  ):
         
         self.target_sim_func = target_sim_func #how to call/store? Partial function?
+        self.target_sim_func_params = target_sim_func_params
         self.episode_count = episode_count
 
         self.update_event = update_event
@@ -30,9 +32,9 @@ class Worker:
         self.extinction_event = extinction_event
 
         self.status = 'New' #Have different states to control worker perhaps?
-        self.shared_output_dump = shared_output_dump #Where process will dump it's output after running episodes
         # Store the each episode output's
         self.outputs = {}
+        self.shared_output_dump = shared_output_dump #Where process will dump it's output after running episodes
 
     # Make this is a Pipe obj for active monitoring in the future
     # def current_status(self):
@@ -52,7 +54,9 @@ class Worker:
         # Blackjack example:
         env = gym.make("Blackjack-v1", sab=False)
         
-        blackjack_agent = BJA.BlackjackAgent(env, shared_q_nets)
+        blackjack_agent = BJA.BlackjackAgent(env, shared_q_nets[0])
+
+
         
         # Worker Loop
         while not self.extinction_event.is_set():
@@ -71,7 +75,7 @@ class Worker:
                 # run an episode
                     # Get SAR and store as an experience
                 # Get episode's SAR results and store inside worker
-            
+            print(f"At runtime Worker {os.getpid()} has shared q-nets: ",shared_q_nets)
             # Debug print: Check if q-net is growing/properly being referenced
             # print("Learning with Q-net key size",len(shared_q_nets.q_dict.keys()))
             # for episode in tqdm(range(self.episode_count)):
@@ -101,6 +105,9 @@ class Worker:
             
             # wait while updating, should also wait until end of epoch
             self.update_event.wait()
+            # Refetch q_table after updating
+            # print(f"After updating Worker {os.getpid()} has q-net: ",shared_q_nets[0])
+            blackjack_agent.q_values = shared_q_nets[0]
 
                 
 
@@ -118,19 +125,20 @@ def load_worker(
         extinction_event,
         shared_output_dump,
         shared_q_nets,
-        target_sim_func=None):
+        target_sim_func=None,
+        target_sim_func_params = {}):
     '''
+    A function that can load a worker instance
     Params:
     '''
     # print(shared_q_nets)
     worker = Worker(
-        target_sim_func= None,
         episode_count = episode_count,
         update_event = update_event,
         completion_barrier = completion_barrier,
         extinction_event = extinction_event,
-        shared_output_dump = shared_output_dump
-
-        )
+        shared_output_dump = shared_output_dump,
+        target_sim_func = target_sim_func,
+        target_sim_func_params = target_sim_func_params)
     
     worker.sim_execution(shared_q_nets=shared_q_nets)

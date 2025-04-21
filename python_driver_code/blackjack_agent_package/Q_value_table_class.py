@@ -105,7 +105,6 @@ class QValueTable:
             print(e)
             return -1
     
-
         
         
     def load(self, filename="q_values.pt"):
