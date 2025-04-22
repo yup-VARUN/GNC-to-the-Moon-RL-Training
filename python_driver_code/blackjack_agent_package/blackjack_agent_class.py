@@ -2,17 +2,19 @@ import random
 from .Q_value_table_class import QValueTable
 class BlackjackAgent:
     """Agent that interacts with the Blackjack environment"""
-    def __init__(self, env, q_values, epsilon=0.1):
+    def __init__(self, env, q_values, epsilon=0.1, exploration_function = random.random):
         self.env = env
         self.q_values = q_values  # Shared Q-value object
         self.epsilon = epsilon    # Exploration rate
+        # Set the distribution to determination the exploration 
+        self.exploration_function =  exploration_function
     
     def select_action(self, state, training=True):
         """
         Select action using epsilon-greedy policy
         Returns selected action
         """
-        if training and random.random() < self.epsilon:
+        if training and self.exploration_function() < self.epsilon:
             # Exploration: random action
             return self.env.action_space.sample()
         else:
@@ -21,7 +23,7 @@ class BlackjackAgent:
     
     def collect_experience(self, num_episodes=1):
         """
-        Collect experience by running episodes
+        Collect experience by running multiple episodes
         Returns list of experiences and total rewards
         """
         all_experiences = []
@@ -73,9 +75,6 @@ class BlackjackAgent:
         """Update exploration rate"""
         self.epsilon = epsilon
 
-    def set_epsilon(self, epsilon):
-        """Update exploration rate"""
-        self.epsilon = epsilon
     
     def evaluate(self, num_episodes=1000):
         """Evaluate agent performance"""
