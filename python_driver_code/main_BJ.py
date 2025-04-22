@@ -12,7 +12,10 @@ import time
 import os
 from functools import partial
 
+from custom_utils import prepare_agent
 from blackjack_agent_package import Q_value_table_class as QVT
+from blackjack_agent_package import blackjack_agent_class as BJA
+
 from episode_worker import Worker, load_worker
 # from multiprocessing.
 # from multiprocessing.managers import SyncManager
@@ -22,7 +25,8 @@ EPISODE_CNT = 10 #Total Episodes per process
 NUM_PROCESSES = 4 #Later dictate this to be dependent on GPU capbility, number of workers at a time processing each episode
 EPOCH_CNT = 5
 EPLISON = 0.1 #For eplison decay of each process/worker across all episode loops; 
-EXPLORATION_SELECTION = None #Random number generation method for epsilon greedy policy
+EXPLORATION_SELECTION = None #Random number generation method for epsilon greedy policy, must be 0-1
+
 
 
 def update_nets(update_event: mpEventType, outputs_of_processes: dict[str : dict[int: tuple]], pnet= None, qnets=None):
@@ -42,20 +46,21 @@ def update_nets(update_event: mpEventType, outputs_of_processes: dict[str : dict
     if not (pnet or qnets):
         print("No nets given!")
         raise 
-    print("Objs Before updating", qnets)
+    print("Qnet Objs Before updating", qnets)
     qnet = qnets[0]
-    # Pause workers for update
-    print("Q-net key size",len(qnet.q_dict.keys()))
-    
-    # In future: Scrap this nested dict crap for redis :/
-    print("Performing update to networks:")
-    for proc_out in tqdm(outputs_of_processes.values()):
-        for episode in proc_out.values():
-            experiences = episode[0]
-            qnet.update(experiences)
-    print("Q-net key size after updating",len(qnet.q_dict.keys()))
-    qnets[0] = qnet
-    print("Objs after updating", qnets)
+    for index,qnet in enumerate(qnets):
+        # Pause workers for update
+        print("Q-net key size before updating: ",len(qnet.q_dict.keys()))
+        
+        # In future: maybe Scrap this nested dict crap for redis :/
+        print("Performing update to networks:")
+        for proc_out in tqdm(outputs_of_processes.values()):
+            for episode in proc_out.values():
+                experiences = episode[0]
+                qnet.update(experiences) #Abstracted Qnet update
+        print("Q-net key size after updating",len(qnet.q_dict.keys()))
+        qnets[index] = qnet
+    print("Qnets Objs after updating", qnets)
     # Use Blackjack Q-net/shared_network class value obj's method to update here to simplify things
     # Set event to True and allow workers to run again
     update_event.set()
@@ -64,11 +69,11 @@ def update_nets(update_event: mpEventType, outputs_of_processes: dict[str : dict
     # update_event.clear()
     
 
-
-def pass_nets_to_workers(update_event: mpEventType, new_nets, worker_processes):
-    update_event.clear()
-    pass
-    # May not need if directly overwriting nets by reference
+# Deappreciated
+# def pass_nets_to_workers(update_event: mpEventType, new_nets, worker_processes):
+#     update_event.clear()
+#     pass
+#     # May not need if directly overwriting nets by reference
 
 def setting_device():
     if torch.cuda.is_available():
@@ -80,13 +85,13 @@ def setting_device():
         return device
     
 def celebrate():
-    print("All workers reach barrier!")
+    print("All workers reached barrier!")
 
 
 def main():
     
     # Inits
-    tmp.freeze_support()  
+    
     extinction_event = mp.Event() #Kill everything after program exits
     
     print("Device detected:", setting_device())
@@ -124,19 +129,29 @@ def main():
 
     env = gym.make("Blackjack-v1", sab=False)
     action_size = env.action_space.n
-    env.close()
     # env = gym.wrappers.RecordEpisodeStatistics(env, buffer_length=1000)
     # BJ_Q_net = QVT.QValueTable(env)
     BJ_Q_net = QVT.QValueTable(action_size)
 
-    shared_BJ_Q_net = update_sync_manager.list([BJ_Q_net])
+    # Share Q_Net in shared list/ probably change to dictionary in future
+    shared_Q_nets = update_sync_manager.list([BJ_Q_net])
     
-    print(shared_BJ_Q_net)
+    
+    print(shared_Q_nets)
 
     # Initialize workers
     
     target_sim_func: partial
-
+    # Pass parameters to target sim function
+    target_sim_func_params = {
+        "env" : env, 
+        "q_values" : shared_Q_nets[0],
+        "epilson": EPLISON
+    }
+    target_sim_func = prepare_agent(
+        BJA.BlackjackAgent, 
+        target_sim_func_params
+    )
     # worker = Worker(
     #     target_sim_func= None,
     #     episode_count = EPISODE_CNT,
@@ -157,12 +172,13 @@ def main():
         process = tmp.Process(
             target= load_worker,
             kwargs={
-            "shared_q_nets": shared_BJ_Q_net,
-            "episode_count": 10,
+            "shared_q_nets": shared_Q_nets,
+            "episode_count": EPISODE_CNT,
             "update_event": update_completion,
             "completion_barrier": sim_barrier_completion, 
             "extinction_event": extinction_event,
-            "shared_output_dump": processes_outputs
+            "shared_output_dump": processes_outputs,
+            "target_sim_func" : target_sim_func
         }
 
         )
@@ -176,7 +192,7 @@ def main():
             exit()
         # processes_running_state.update({process.ident: worker.status})
 
-    
+    env.close()
 
 
     # Main Training Loop
@@ -200,10 +216,9 @@ def main():
         # <Epoche: [<process_id: end_results_of_episodes_of_that_process>]>
         playback_queue.update({epoch: processes_outputs})
         
-
         # Update nets
         print("Now updating Q-net")
-        update_nets(update_completion, processes_outputs, qnets = shared_BJ_Q_net)
+        update_nets(update_completion, processes_outputs, qnets = shared_Q_nets)
         time.sleep(3)
         # sim_barrier_completion.reset()
         update_completion.clear()
@@ -222,13 +237,14 @@ def main():
         if process.is_alive():
             process.terminate()
     print("ALL EPOCHES Finished!")
-    print("Final Q-net key size: ",len(shared_BJ_Q_net[0].q_dict.keys()))
+    print("Final Q-net key size: ",len(shared_Q_nets[0].q_dict.keys()))
     print("Saving model")
     # Export the model
-    export = shared_BJ_Q_net[0].save()
+    export = shared_Q_nets[0].save()
     if export != 0:
         print("Unable to save model")
 
 
 if __name__ == "__main__":
+    tmp.freeze_support()
     main()

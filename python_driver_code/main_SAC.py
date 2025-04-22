@@ -1,5 +1,6 @@
 
 from stable_baselines3 import SAC
+from stable_baselines3.common.logger import Logger
 import gymnasium as gym
 
 import torch
@@ -12,20 +13,22 @@ import time
 import os
 from functools import partial
 
-from blackjack_agent_package import Q_value_table_class as QVT
-from episode_worker import Worker, load_worker
-# from multiprocessing.
-# from multiprocessing.managers import SyncManager
+from custom_utils import prepare_agent
+
+
+from episode_worker_SAC import load_worker
+from SAC_agent_package.prime_model import prime_SAC_model
 
 # Hyperparameters
 EPISODE_CNT = 10 #Total Episodes per process
-NUM_PROCESSES = 4 #Later dictate this to be dependent on GPU capbility, number of workers at a time processing each episode
+NUM_PROCESSES = 2 #Later dictate this to be dependent on GPU capbility, number of workers at a time processing each episode
 EPOCH_CNT = 5
 EPLISON = 0.1 #For eplison decay of each process/worker across all episode loops; 
-EXPLORATION_SELECTION = None #Random number generation method for epsilon greedy policy
+EXPLORATION_SELECTION = None #Random number generation method for epsilon greedy policy, must be 0-1
 
 
-def update_nets(update_event: mpEventType, outputs_of_processes: dict[str : dict[int: tuple]], pnet= None, qnets=None):
+
+def update_nets(update_event: mpEventType, outputs_of_processes: dict[str : dict[int: tuple]], model: prime_SAC_model, shared_nets: dict):
     '''
     
     
@@ -39,36 +42,36 @@ def update_nets(update_event: mpEventType, outputs_of_processes: dict[str : dict
     
     '''
 
-    if not (pnet or qnets):
-        print("No nets given!")
-        raise 
-    print("Objs Before updating", qnets)
-    qnet = qnets[0]
-    # Pause workers for update
-    print("Q-net key size",len(qnet.q_dict.keys()))
-    
-    # In future: Scrap this nested dict crap for redis :/
+    # if not (pnet or qnets):
+    #     print("No nets given!")
+    #     raise 
+ 
+        # In future: maybe Scrap this nested dict crap for redis :/
     print("Performing update to networks:")
     for proc_out in tqdm(outputs_of_processes.values()):
         for episode in proc_out.values():
             experiences = episode[0]
-            qnet.update(experiences)
-    print("Q-net key size after updating",len(qnet.q_dict.keys()))
-    qnets[0] = qnet
-    print("Objs after updating", qnets)
-    # Use Blackjack Q-net/shared_network class value obj's method to update here to simplify things
+            if not hasattr(model, "_logger"):
+                
+                model._logger = Logger(folder=None, output_formats=[])
+            model.mass_push_to_replay_buff(experiences)
+            # May have to tune this or implement env- step by episode loop
+            # Current issue: 'prime_SAC_model' object has no attribute '_logger', maybe due to not actually running prime model
+            model.train(gradient_steps=1)
+    
+    # print("Qnets Objs after updating", qnets)
+    
     # Set event to True and allow workers to run again
     update_event.set()
     print("Update status:", update_event.is_set())
-    # time.sleep(1)
-    # update_event.clear()
+    
     
 
-
-def pass_nets_to_workers(update_event: mpEventType, new_nets, worker_processes):
-    update_event.clear()
-    pass
-    # May not need if directly overwriting nets by reference
+# Deappreciated
+# def pass_nets_to_workers(update_event: mpEventType, new_nets, worker_processes):
+#     update_event.clear()
+#     pass
+#     # May not need if directly overwriting nets by reference
 
 def setting_device():
     if torch.cuda.is_available():
@@ -80,13 +83,13 @@ def setting_device():
         return device
     
 def celebrate():
-    print("All workers reach barrier!")
+    print("All workers reached barrier!")
 
 
 def main():
     
     # Inits
-    tmp.freeze_support()  
+    
     extinction_event = mp.Event() #Kill everything after program exits
     
     print("Device detected:", setting_device())
@@ -99,7 +102,7 @@ def main():
     # Have manager for syncing updates to nets
     update_sync_manager = tmp.Manager()
 
-    sim_barrier_completion = update_sync_manager.Barrier(parties=NUM_PROCESSES+1,action=celebrate ) 
+    sim_barrier_completion = update_sync_manager.Barrier(parties=NUM_PROCESSES+1, action=celebrate ) 
     # processes_running_state = update_sync_manager.dict() #{<process_obj: curr_status>}
     processes : list[tmp.Process]
     processes = [] #Where The actual process objs
@@ -113,56 +116,57 @@ def main():
     playback_queue = {}
     
     update_completion = tmp.Event() #To allow processes to rerun after updating P&Q nets is FULLY completed
-    # print(type(update_completion))
-    # print(type(episode_barrier_completion))
 
     # Create shared Q-nets and Policy Nets 
         # Dependent on sim's requirements, regardless will be shared tensors;
         # To avoid consuming vram memory and reserve for sim execution:
         # consider storing main copy as cpu tensor then mov copies to workers' gpu tensors
-    # Blackjack example:
-
-    env = gym.make("Blackjack-v1", sab=False)
-    action_size = env.action_space.n
-    env.close()
-    # env = gym.wrappers.RecordEpisodeStatistics(env, buffer_length=1000)
-    # BJ_Q_net = QVT.QValueTable(env)
-    BJ_Q_net = QVT.QValueTable(action_size)
-
-    shared_BJ_Q_net = update_sync_manager.list([BJ_Q_net])
-    
-    print(shared_BJ_Q_net)
-
-    # Initialize workers
+    env = gym.make("Pendulum-v1")  # This has a continuous action space
     
     target_sim_func: partial
+    target_sim_func_params = {
+        'policy' : "MlpPolicy",
+        'env' : env,
+        'verbose': 1
+    }
 
-    # worker = Worker(
-    #     target_sim_func= None,
-    #     episode_count = EPISODE_CNT,
-    #     update_event = update_completion,
-    #     completion_barrier = sim_barrier_completion,
-    #     extinction_event = extinction_event,
-    #     shared_output_dump = processes_outputs
+    env = gym.make("Blackjack-v1", sab=False)
+    target_sim_func = prepare_agent(prime_SAC_model, target_sim_func_params)
+    prime_model: prime_SAC_model = target_sim_func()
+    prime_model.share_model_across_memory()
+    shared_networks_dict = update_sync_manager.dict()
+    # Policy
+    shared_networks_dict["Policy"] = prime_model.policy.state_dict()
 
-    # )
+    # Critic/Q nets
+    shared_networks_dict["Critic"] = prime_model.critic.state_dict()
+    shared_networks_dict["Critic_Target"] = prime_model.critic_target.state_dict()
     
+    # log_ent_coef
+    if hasattr(prime_model, "log_ent_coef"):
+        shared_networks_dict["log_ent_coef"] = prime_model.log_ent_coef.data
+    
+    # Pass parameters to target sim function
+    
+    
+    # Initialize workers
     # Init Processes
     print("Initializing Workers")
     for i in tqdm(range(NUM_PROCESSES)):
         
 
         # Run worker's
-        # Current Problem: Q-net obj cannot be passed because of pickling issues
+        
         process = tmp.Process(
             target= load_worker,
             kwargs={
-            "shared_q_nets": shared_BJ_Q_net,
-            "episode_count": 10,
+            "shared_nets": shared_networks_dict,
+            "episode_count": EPISODE_CNT,
             "update_event": update_completion,
             "completion_barrier": sim_barrier_completion, 
             "extinction_event": extinction_event,
-            "shared_output_dump": processes_outputs
+            "shared_output_dump": processes_outputs,
+            "target_sim_func" : target_sim_func
         }
 
         )
@@ -176,7 +180,7 @@ def main():
             exit()
         # processes_running_state.update({process.ident: worker.status})
 
-    
+    env.close()
 
 
     # Main Training Loop
@@ -200,10 +204,9 @@ def main():
         # <Epoche: [<process_id: end_results_of_episodes_of_that_process>]>
         playback_queue.update({epoch: processes_outputs})
         
-
         # Update nets
         print("Now updating Q-net")
-        update_nets(update_completion, processes_outputs, qnets = shared_BJ_Q_net)
+        update_nets(update_completion, processes_outputs, prime_model, shared_networks_dict)
         time.sleep(3)
         # sim_barrier_completion.reset()
         update_completion.clear()
@@ -222,13 +225,15 @@ def main():
         if process.is_alive():
             process.terminate()
     print("ALL EPOCHES Finished!")
-    print("Final Q-net key size: ",len(shared_BJ_Q_net[0].q_dict.keys()))
+    # print("Final Q-net key size: ",len(shared_Q_nets[0].q_dict.keys()))
+
     print("Saving model")
     # Export the model
-    export = shared_BJ_Q_net[0].save()
-    if export != 0:
-        print("Unable to save model")
+    export = prime_model.save()
+    # if export != 0:
+    #     print("Unable to save model")
 
 
 if __name__ == "__main__":
+    tmp.freeze_support()
     main()

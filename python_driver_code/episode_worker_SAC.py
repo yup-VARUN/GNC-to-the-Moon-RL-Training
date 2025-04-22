@@ -1,13 +1,16 @@
 import multiprocessing as mp
 from multiprocessing import synchronize
-import gymnasium as gym
+
 from torch import multiprocessing as tmp
 from collections import deque
 from functools import partial
-from blackjack_agent_package import blackjack_agent_class as BJA
+
 import time
 import os
 from tqdm import tqdm
+
+import gymnasium as gym
+from SAC_agent_package.prime_model import prime_SAC_model
 
 class Worker:
     '''
@@ -41,21 +44,20 @@ class Worker:
     #     return self.status
 
 
-    def sim_execution(self, shared_policy_net = None, shared_q_nets = None):
+    def sim_execution(self, shared_nets:dict, shared_policy_net = None, shared_q_nets = None):
         '''
         Pass these onto the retained sim function
+        
+
         shared_policy_net := Policy network
         shared_q_nets := List of q-nets
         '''
 
-        if not (shared_policy_net or shared_q_nets):
+        if not (shared_policy_net or shared_q_nets or shared_nets):
             print("Missing nets for updating")
             raise 
-        # Blackjack example:
-        # env = gym.make("Blackjack-v1", sab=False)
         
-        # blackjack_agent = BJA.BlackjackAgent(env, shared_q_nets[0])
-        blackjack_agent = self.target_sim_func()
+        SAC_agent:prime_SAC_model = self.target_sim_func()
 
 
         
@@ -82,7 +84,7 @@ class Worker:
             # for episode in tqdm(range(self.episode_count)):
             for episode in range(self.episode_count):
                 # Run Episode
-                experience, reward = blackjack_agent.run_episode()
+                experience, reward = SAC_agent.run_episode()
                 
                 self.outputs.update({episode: (experience, reward)})
             pass
@@ -109,7 +111,7 @@ class Worker:
             
             # Refetch q_table after updating
             # print(f"After updating Worker {os.getpid()} has q-net: ",shared_q_nets[0])
-            blackjack_agent.q_values = shared_q_nets[0]
+            SAC_agent.fetch_networks(source_policy= shared_nets["Policy"], source_critic= shared_nets["Critic"], source_critic_target=shared_nets["Critic_Target"])
 
                 
 
@@ -126,9 +128,11 @@ def load_worker(
         completion_barrier,
         extinction_event,
         shared_output_dump,
-        shared_q_nets,
-        target_sim_func=None,
-        target_sim_func_params = {}):
+        target_sim_func,
+        shared_nets,
+        shared_q_nets= None,
+        shared_policy_net =None,
+        ):
     '''
     A function that can load a worker instance
     Params:
@@ -141,6 +145,6 @@ def load_worker(
         extinction_event = extinction_event,
         shared_output_dump = shared_output_dump,
         target_sim_func = target_sim_func,
-        target_sim_func_params = target_sim_func_params)
+        )
     
-    worker.sim_execution(shared_q_nets=shared_q_nets)
+    worker.sim_execution(shared_nets=shared_nets,shared_policy_net = shared_policy_net, shared_q_nets=shared_q_nets)
