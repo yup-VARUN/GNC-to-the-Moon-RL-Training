@@ -16,7 +16,7 @@ from custom_utils import prepare_agent
 from blackjack_agent_package import Q_value_table_class as QVT
 from blackjack_agent_package import blackjack_agent_class as BJA
 
-from episode_worker import Worker, load_worker
+from python_driver_code.episode_worker_BJA import Worker, load_worker
 # from multiprocessing.
 # from multiprocessing.managers import SyncManager
 

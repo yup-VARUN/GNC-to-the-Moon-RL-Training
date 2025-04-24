@@ -1,5 +1,8 @@
 import inspect
 from functools import partial
+import pandas as pd
+import json
+
 
 def prepare_agent(agent: object, keyargs:dict)-> partial:
     '''
@@ -34,3 +37,33 @@ def prepare_agent(agent: object, keyargs:dict)-> partial:
     #         raise
         
     return target_agent
+
+def log_dump_to_json(filename: str, log: dict):
+    '''
+    log schema:
+            total_execution_time : float
+            initial_mem_usage : in MB
+            episodes_per_epoch : int
+            Epoches:
+                Epoch:
+                    total_compute_time_for_episodes_cnt/spent_in_curr_epoch: float
+                    total_num_SAR_collected: int
+                    time_spent_waiting_on_update: float
+                    
+                    episodes:
+                        [Episode:
+                                Memory_usage_at_episode
+                            ...
+                        Episode_n]
+                ...
+                Epoch:
+                    ...
+        '''
+    with open(filename + ".json",'w') as file:
+        json.dump(log, file)
+    return f"{filename} has been dumped"
+
+    pass
+
+def view_worker_metrics(worker_json):
+    pass

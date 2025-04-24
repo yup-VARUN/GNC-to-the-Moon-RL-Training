@@ -22,23 +22,19 @@ from SAC_agent_package.prime_model import prime_SAC_model
 # Hyperparameters
 EPISODE_CNT = 10 #Total Episodes per process
 NUM_PROCESSES = 2 #Later dictate this to be dependent on GPU capbility, number of workers at a time processing each episode
-EPOCH_CNT = 5
+EPOCH_CNT = 3
 EPLISON = 0.1 #For eplison decay of each process/worker across all episode loops; 
 EXPLORATION_SELECTION = None #Random number generation method for epsilon greedy policy, must be 0-1
-
+MODEL_OUTPUT_DIR = "output_models"
 
 
 def update_nets(update_event: mpEventType, outputs_of_processes: dict[str : dict[int: tuple]], model: prime_SAC_model, shared_nets: dict):
     '''
-    
-    
-    '''
-    '''
     outputs_of_processes := dict contained as 
-    #<process_id: end_results_of_episodes_of_that_process>
-        # end_results_of_episodes_of_that_process : episode
-            # <episode: SAR outputs ~(experience, reward), ...>
-                # episode: (experience, reward)
+        <process_id: end_results_of_episodes_of_that_process>
+            end_results_of_episodes_of_that_process : episode
+                <episode: SAR outputs ~(experience, reward), ...>
+                    episode: (experience, reward)
     
     '''
 
@@ -46,21 +42,32 @@ def update_nets(update_event: mpEventType, outputs_of_processes: dict[str : dict
     #     print("No nets given!")
     #     raise 
  
-        # In future: maybe Scrap this nested dict crap for redis :/
+    # In future: maybe Scrap this nested dict crap for redis :/
+    if not hasattr(model, "_logger"):
+        
+        model._logger = Logger(folder=None, output_formats=[])
     print("Performing update to networks:")
+    # Extract from output each worker
     for proc_out in tqdm(outputs_of_processes.values()):
+        # Extract by episode
         for episode in proc_out.values():
             experiences = episode[0]
-            if not hasattr(model, "_logger"):
-                
-                model._logger = Logger(folder=None, output_formats=[])
             model.mass_push_to_replay_buff(experiences)
             # May have to tune this or implement env- step by episode loop
-            # Current issue: 'prime_SAC_model' object has no attribute '_logger', maybe due to not actually running prime model
+            # Current issue: 'prime_SAC_model' object has no attribute '_logger', 
+            # the prime model may not update effectively without it
+            # Future plan: pull log from workers and port it to prime model to optimize update with lr schedule
+
             model.train(gradient_steps=1)
     
     # print("Qnets Objs after updating", qnets)
-    
+    shared_nets["Policy"] = model.policy.state_dict()
+
+    # Critic/Q nets
+    shared_nets["Critic"] = model.critic.state_dict()
+    shared_nets["Critic_Target"] = model.critic_target.state_dict()
+    if "log_ent_coef" in shared_nets.keys() and hasattr(model, "log_ent_coef"):
+        shared_nets["log_ent_coef"] = model.log_ent_coef.data
     # Set event to True and allow workers to run again
     update_event.set()
     print("Update status:", update_event.is_set())
@@ -124,13 +131,14 @@ def main():
     env = gym.make("Pendulum-v1")  # This has a continuous action space
     
     target_sim_func: partial
+    # Add Model's 
     target_sim_func_params = {
         'policy' : "MlpPolicy",
         'env' : env,
         'verbose': 1
     }
 
-    env = gym.make("Blackjack-v1", sab=False)
+    env = gym.make("Pendulum-v1")
     target_sim_func = prepare_agent(prime_SAC_model, target_sim_func_params)
     prime_model: prime_SAC_model = target_sim_func()
     prime_model.share_model_across_memory()
@@ -156,17 +164,19 @@ def main():
         
 
         # Run worker's
-        
+            # Note: in future replace kwargs with a env file or web interface for interaction
         process = tmp.Process(
             target= load_worker,
             kwargs={
+            "parent_process_id": os.getpid(),
             "shared_nets": shared_networks_dict,
             "episode_count": EPISODE_CNT,
             "update_event": update_completion,
             "completion_barrier": sim_barrier_completion, 
             "extinction_event": extinction_event,
             "shared_output_dump": processes_outputs,
-            "target_sim_func" : target_sim_func
+            "target_sim_func" : target_sim_func,
+            'log_usage' : True
         }
 
         )
@@ -205,7 +215,11 @@ def main():
         playback_queue.update({epoch: processes_outputs})
         
         # Update nets
-        print("Now updating Q-net")
+        print("Now updating P&Q-nets")
+        print(epoch)
+        if epoch == EPOCH_CNT - 1:
+            extinction_event.set()
+            update_completion.clear()
         update_nets(update_completion, processes_outputs, prime_model, shared_networks_dict)
         time.sleep(3)
         # sim_barrier_completion.reset()
@@ -221,7 +235,7 @@ def main():
     extinction_event.set()
     process: tmp.Process
     for process in processes:
-        process.join(timeout=1)
+        process.join(timeout=10) #Wait for Workers to potentially write logs 
         if process.is_alive():
             process.terminate()
     print("ALL EPOCHES Finished!")
@@ -229,7 +243,8 @@ def main():
 
     print("Saving model")
     # Export the model
-    export = prime_model.save()
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    export = prime_model.save(os.path.join(MODEL_OUTPUT_DIR, f"{os.getpid()}_model_{timestamp}"))
     # if export != 0:
     #     print("Unable to save model")
 
