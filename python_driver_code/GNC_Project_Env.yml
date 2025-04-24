@@ -1,0 +1,15 @@
+name: GNC_Project_Env
+channels:
+  - defaults
+  - https://repo.anaconda.com/pkgs/main
+  - https://repo.anaconda.com/pkgs/r
+dependencies:
+  - python=3.9
+  - redis
+  - redis-py
+  - gymnasium
+  - conda-forge::stable-baselines3
+  - pytorch::pytorch
+  - tqdm
+  - ipykernel
+prefix: /opt/anaconda3/envs/GNC_Project_Env
