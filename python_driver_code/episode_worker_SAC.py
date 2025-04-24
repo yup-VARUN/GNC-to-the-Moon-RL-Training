@@ -150,7 +150,7 @@ class Worker:
             episode_batch_timer_start = time.perf_counter()
             self.log["Epoches"][internal_epoch] = {}
             self.log["Epoches"][internal_epoch]["Episodes"] = {}
-
+            
             # for episode in tqdm(range(self.episode_count)):
             for episode in range(self.episode_count):
                 # Run Episode and collect SARs/Experience
@@ -224,7 +224,7 @@ class Worker:
         
         log_dump_to_json(file_out_dir, self.log)
 
-        print(f"Worker {os.getpid()} ending")
+        # print(f"Worker {os.getpid()} ending")
         
     def sim_execution(self, shared_nets:dict, shared_policy_net = None, shared_q_nets = None):
         '''

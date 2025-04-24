@@ -23,7 +23,7 @@ from SAC_agent_package.prime_model import prime_SAC_model
 EPISODE_CNT = 10 #Total Episodes per process
 NUM_PROCESSES = 2 #Later dictate this to be dependent on GPU capbility, number of workers at a time processing each episode
 EPOCH_CNT = 3
-EPLISON = 0.1 #For eplison decay of each process/worker across all episode loops; 
+# EPLISON = 0.1 #For eplison decay of each process/worker across all episode loops; 
 EXPLORATION_SELECTION = None #Random number generation method for epsilon greedy policy, must be 0-1
 MODEL_OUTPUT_DIR = "output_models"
 
