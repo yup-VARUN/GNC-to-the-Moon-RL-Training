@@ -122,7 +122,8 @@
           "addressPrefixes": [
             "[variables('addressPrefix')]"
           ]
-        },
+        }
+        ,
         "subnets": [
           {
             "name": "[variables('subnetName')]",
@@ -233,6 +234,9 @@
         "[resourceId('Microsoft.Network/networkInterfaces', concat(variables('nicName'), '-', copyIndex(1)))]",
         "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName'))]"
       ],
+      "identity": { // Added Managed Identity
+        "type": "SystemAssigned"
+      },
       "properties": {
         "hardwareProfile": {
           "vmSize": "[parameters('vmSize')]"
